@@ -5,16 +5,16 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
       - name: Install System Dependencies
         run: |
@@ -22,13 +22,20 @@ jobs:
           sudo apt-get install -y \
             build-essential git zip unzip openjdk-17-jdk \
             autoconf libtool pkg-config zlib1g-dev \
-            libncurses5-dev libncursesw5-dev libtinfo6 \
-            cmake libffi-dev libssl-dev automake libltdl-dev
+            libncurses-dev cmake libffi-dev libssl-dev \
+            automake libltdl-dev patch
 
-      - name: Install Buildozer and Cython
+      - name: Install Buildozer and Dependencies
         run: |
-          pip install --upgrade pip
-          pip install buildozer cython==0.29.36
+          pip install --upgrade pip "setuptools<70.0.0" wheel
+          pip install "cython<3.0.0"
+          pip install git+https://github.com/kivy/buildozer.git@master
+
+      - name: Check and Fix spec file name
+        run: |
+          if [ -f "buildozer.spec.txt" ]; then mv buildozer.spec.txt buildozer.spec; fi
+          if [ -f "main.py.txt" ]; then mv main.py.txt main.py; fi
+          ls -la
 
       - name: Build APK with Buildozer
         run: |
