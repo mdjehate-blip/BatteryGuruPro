@@ -30,10 +30,11 @@ jobs:
         run: |
           pip install --upgrade pip "setuptools<70.0.0" wheel
           pip install "cython==0.29.36"
-          pip install buildozer==1.5.0
+          pip install git+https://github.com/kivy/buildozer.git@master
 
-      - name: Auto-Configure Clean buildozer.spec
+      - name: Fix File Names & Create Clean buildozer.spec
         run: |
+          if [ -f "main.py.txt" ]; then mv main.py.txt main.py; fi
           cat << 'EOF' > buildozer.spec
           [app]
           title = Battery Guru Pro
@@ -42,7 +43,7 @@ jobs:
           source.dir = .
           source.include_exts = py,png,jpg,kv,atlas
           version = 1.0
-          requirements = python3,kivy==2.3.0,pyjnius==1.6.1
+          requirements = python3,kivy==2.3.0,pyjnius
           orientation = portrait
           fullscreen = 0
           android.permissions = FOREGROUND_SERVICE, WAKE_LOCK, POST_NOTIFICATIONS
@@ -51,31 +52,39 @@ jobs:
           android.ndk = 25b
           android.archs = arm64-v8a
           android.accept_sdk_license = True
-          p4a.branch = develop
+          p4a.branch = master
 
           [buildozer]
           log_level = 2
           warn_on_root = 0
           EOF
 
-      - name: Build APK (With Auto Fix for SDK 36 Bug)
+      - name: Build APK with Smart SDK Fix
         run: |
           export CFLAGS="-Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types"
           
-          # ১ম চেষ্টায় যদি SDK 36 বাগের কারণে থামে, তবে নিজে থেকেই ফোল্ডারটি মুছে আবার বিল্ড করবে
+          # ১ম রান: SDK ডাউনলোড ও ইনিশিয়াল বিল্ড
           if ! yes | buildozer android debug > build.log 2>&1; then
-            echo "Applying Android Build-Tools 36.0.0 Fix..."
-            rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/36* || true
-            rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/35* || true
+            echo "First pass stopped. Checking and fixing Android SDK Build-Tools..."
             
-            # ২য় বার চূড়ান্ত বিল্ড রান করা
-            if ! yes | buildozer android debug >> build.log 2>&1; then
-              echo "========== EXACT ERROR AT THE BOTTOM =========="
-              tail -n 80 build.log
+            # sdkmanager খুঁজে বের করে সঠিক build-tools 33.0.2 ইনস্টল করা এবং 36.0.0 রিমুভ করা
+            SDKM=$(find ~/.buildozer -name "sdkmanager" | head -n 1)
+            if [ -n "$SDKM" ]; then
+              yes | "$SDKM" --sdk_root="$HOME/.buildozer/android/platform/android-sdk" "build-tools;33.0.2" "platforms;android-33" || true
+              rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/36* || true
+              rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/35* || true
+            fi
+            
+            # ২য় রান: ফিক্সড SDK দিয়ে ফাইনাল বিল্ড
+            if ! yes | buildozer android debug > build2.log 2>&1; then
+              echo "================ REAL ERROR FOUND ================"
+              grep -B 25 -A 5 "Command failed" build2.log || tail -n 200 build2.log | head -n 120
+              echo "================ FIRST LOG ERROR ================="
+              grep -B 25 -A 5 "Command failed" build.log || true
               exit 1
             fi
           fi
-          echo "Build Successful!"
+          echo "APK Built Successfully!"
           ls -la bin/
 
       - name: Upload APK for Download
