@@ -24,13 +24,13 @@ jobs:
             autoconf libtool pkg-config zlib1g-dev \
             libncurses5-dev libncursesw5-dev libtinfo5 \
             cmake libffi-dev libssl-dev automake libltdl-dev \
-            patch libsqlite3-dev lld
+            patch libsqlite3-dev lld liblzma-dev
 
       - name: Install Buildozer and Dependencies
         run: |
           pip install --upgrade pip "setuptools<70.0.0" wheel
           pip install "cython==0.29.36"
-          pip install git+https://github.com/kivy/buildozer.git@master
+          pip install buildozer==1.5.0
 
       - name: Auto-Configure Clean buildozer.spec
         run: |
@@ -42,25 +42,41 @@ jobs:
           source.dir = .
           source.include_exts = py,png,jpg,kv,atlas
           version = 1.0
-          requirements = python3,kivy==2.3.0,pyjnius
+          requirements = python3,kivy==2.3.0,pyjnius==1.6.1
           orientation = portrait
           fullscreen = 0
           android.permissions = FOREGROUND_SERVICE, WAKE_LOCK, POST_NOTIFICATIONS
           android.api = 33
           android.minapi = 21
           android.ndk = 25b
-          android.build_tools_version = 33.0.2
-          android.archs = arm64-v8a, armeabi-v7a
+          android.archs = arm64-v8a
           android.accept_sdk_license = True
+          p4a.branch = develop
 
           [buildozer]
           log_level = 2
           warn_on_root = 0
           EOF
 
-      - name: Build APK with Buildozer
+      - name: Build APK (With Auto Fix for SDK 36 Bug)
         run: |
-          yes | buildozer android debug
+          export CFLAGS="-Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types"
+          
+          # ১ম চেষ্টায় যদি SDK 36 বাগের কারণে থামে, তবে নিজে থেকেই ফোল্ডারটি মুছে আবার বিল্ড করবে
+          if ! yes | buildozer android debug > build.log 2>&1; then
+            echo "Applying Android Build-Tools 36.0.0 Fix..."
+            rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/36* || true
+            rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/35* || true
+            
+            # ২য় বার চূড়ান্ত বিল্ড রান করা
+            if ! yes | buildozer android debug >> build.log 2>&1; then
+              echo "========== EXACT ERROR AT THE BOTTOM =========="
+              tail -n 80 build.log
+              exit 1
+            fi
+          fi
+          echo "Build Successful!"
+          ls -la bin/
 
       - name: Upload APK for Download
         uses: actions/upload-artifact@v4
