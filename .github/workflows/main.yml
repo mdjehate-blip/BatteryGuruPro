@@ -22,14 +22,15 @@ jobs:
           sudo apt-get install -y \
             build-essential git zip unzip openjdk-17-jdk \
             autoconf libtool pkg-config zlib1g-dev \
-            libncurses-dev cmake libffi-dev libssl-dev \
-            automake libltdl-dev patch libsqlite3-dev
+            libncurses5-dev libncursesw5-dev libtinfo5 \
+            cmake libffi-dev libssl-dev automake libltdl-dev \
+            patch libsqlite3-dev lld
 
       - name: Install Buildozer and Dependencies
         run: |
           pip install --upgrade pip "setuptools<70.0.0" wheel
           pip install "cython==0.29.36"
-          pip install buildozer==1.5.0
+          pip install git+https://github.com/kivy/buildozer.git@master
 
       - name: Auto-Configure Clean buildozer.spec
         run: |
@@ -45,26 +46,17 @@ jobs:
           orientation = portrait
           fullscreen = 0
           android.permissions = FOREGROUND_SERVICE, WAKE_LOCK, POST_NOTIFICATIONS
-          android.api = 34
+          android.api = 33
           android.minapi = 21
           android.ndk = 25b
-          android.archs = arm64-v8a
+          android.build_tools_version = 33.0.2
+          android.archs = arm64-v8a, armeabi-v7a
           android.accept_sdk_license = True
-          p4a.branch = master
 
           [buildozer]
           log_level = 2
           warn_on_root = 0
           EOF
-
-      - name: Pre-install Android SDK & Fix Build-Tools Bug
-        run: |
-          yes | buildozer android update || true
-          SDK_DIR="$HOME/.buildozer/android/platform/android-sdk"
-          if [ -d "$SDK_DIR/build-tools" ]; then
-            rm -rf "$SDK_DIR/build-tools/"*
-            yes | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
-          fi
 
       - name: Build APK with Buildozer
         run: |
