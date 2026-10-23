@@ -11,10 +11,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.10
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install System Dependencies
         run: |
@@ -26,9 +26,9 @@ jobs:
             cmake libffi-dev libssl-dev automake libltdl-dev \
             patch libsqlite3-dev lld liblzma-dev python3-venv
 
-      - name: Install Buildozer & P4A Toolchain Requirements
+      - name: Install Buildozer & Locked Cython
         run: |
-          pip install --upgrade pip "setuptools<70.0.0" wheel
+          pip install --upgrade "pip<24.0" "setuptools<69.0.0" wheel
           pip install "cython==0.29.36" virtualenv appdirs colorama jinja2 sh six toml packaging
           pip install buildozer==1.5.0
 
@@ -43,7 +43,7 @@ jobs:
           source.dir = .
           source.include_exts = py,png,jpg,kv,atlas
           version = 1.0
-          requirements = python3,kivy==2.3.0,pyjnius==1.6.1,six
+          requirements = hostpython3==3.11.6,python3==3.11.6,kivy==2.3.0,pyjnius==1.6.1,six
           orientation = portrait
           fullscreen = 0
           android.permissions = FOREGROUND_SERVICE, WAKE_LOCK, POST_NOTIFICATIONS
@@ -52,23 +52,26 @@ jobs:
           android.ndk = 25b
           android.archs = arm64-v8a
           android.accept_sdk_license = True
-          p4a.branch = master
+          p4a.branch = v2024.01.21
 
           [buildozer]
           log_level = 2
           warn_on_root = 0
           EOF
 
-      - name: Build APK with Toolchain Fix
+      - name: Build APK with Cython & SDK Fix
         run: |
+          # Build Isolation বন্ধ করা যাতে /tmp/build-env তৈরি হয়ে Cython 3 ডাউনলোড না হয়
+          export PIP_NO_BUILD_ISOLATION=1
           export CFLAGS="-Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion"
           export PIP_CONSTRAINT="${GITHUB_WORKSPACE}/constraints.txt"
           echo "cython==0.29.36" > "${GITHUB_WORKSPACE}/constraints.txt"
-          echo "setuptools<70.0.0" >> "${GITHUB_WORKSPACE}/constraints.txt"
+          echo "Cython==0.29.36" >> "${GITHUB_WORKSPACE}/constraints.txt"
+          echo "setuptools<69.0.0" >> "${GITHUB_WORKSPACE}/constraints.txt"
 
-          # ১ম রান: SDK সেটআপ হওয়া
+          # ১ম রান: SDK ডাউনলোড হওয়া
           if ! yes | buildozer android debug > build.log 2>&1; then
-            echo "Checking SDK build-tools and retrying..."
+            echo "Fixing Android SDK Build-Tools 36 bug and retrying..."
             SDKM=$(find ~/.buildozer -name "sdkmanager" | head -n 1)
             if [ -n "$SDKM" ]; then
               yes | "$SDKM" --sdk_root="$HOME/.buildozer/android/platform/android-sdk" "build-tools;33.0.2" "platforms;android-33" || true
@@ -78,8 +81,8 @@ jobs:
 
             # ২য় রান: ফাইনাল বিল্ড
             if ! yes | buildozer android debug >> build.log 2>&1; then
-              echo "========== EXACT TOOLCHAIN ERROR =========="
-              grep -B 120 "Command failed" build.log | tail -n 120
+              echo "========== EXACT ERROR =========="
+              grep -B 100 "Command failed" build.log | tail -n 100
               exit 1
             fi
           fi
