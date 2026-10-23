@@ -16,25 +16,31 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install System Dependencies (With JDK 17)
+      - name: Set up JDK 11 for Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential git zip unzip openjdk-17-jdk \
+            build-essential git zip unzip \
             autoconf libtool pkg-config zlib1g-dev \
             libncurses5-dev libncursesw5-dev libtinfo5 \
             cmake libffi-dev libssl-dev automake libltdl-dev \
             patch libsqlite3-dev lld liblzma-dev python3-venv
 
-      - name: Install Buildozer & Locked Toolchain Packages
+      - name: Install Buildozer and Toolchain Packages
         run: |
-          pip install --upgrade "pip<24.0" "setuptools<69.0.0" wheel
-          pip install "cython==0.29.36" virtualenv appdirs colorama jinja2 sh six toml packaging
-          pip install git+https://github.com/kivy/buildozer.git@master
+          pip install --upgrade 'pip<24.0' 'setuptools<69.0.0' wheel
+          pip install 'cython==0.29.36' virtualenv appdirs colorama jinja2 sh six toml packaging
+          pip install buildozer==1.5.0
 
-      - name: Create Clean buildozer.spec
+      - name: Prepare Clean buildozer.spec
         run: |
-          if [ -f "main.py.txt" ]; then mv main.py.txt main.py; fi
+          if [ -f main.py.txt ]; then mv main.py.txt main.py; fi
           cat << 'EOF' > buildozer.spec
           [app]
           title = Battery Guru Pro
@@ -50,7 +56,7 @@ jobs:
           android.api = 33
           android.minapi = 21
           android.ndk = 25b
-          android.archs = arm64-v8a, armeabi-v7a
+          android.archs = arm64-v8a
           android.accept_sdk_license = True
           p4a.branch = v2024.01.21
 
@@ -59,34 +65,45 @@ jobs:
           warn_on_root = 0
           EOF
 
-      - name: Step 1 - Let Buildozer Download SDK & Fix Build-Tools BEFORE Compile
+      - name: Build Android APK
         run: |
-          # এখানে শুধু SDK ও NDK ডাউনলোড হওয়ার পরই আমরা থামিয়ে দেব যাতে আগে Build-Tools ফিক্স করা যায়
-          yes | buildozer android update || true
-          
-          SDK_DIR="$HOME/.buildozer/android/platform/android-sdk"
-          SDKM=$(find "$SDK_DIR" -name "sdkmanager" | head -n 1)
-          
-          if [ -n "$SDKM" ]; then
-            echo "Found sdkmanager at: $SDKM"
-            # অফিশিয়াল build-tools 33.0.2 এবং platform 33 নিশ্চিত করা
-            yes | "$SDKM" --sdk_root="$SDK_DIR" "platform-tools" "platforms;android-33" "build-tools;33.0.2" || true
+          export PIP_NO_BUILD_ISOLATION=1
+          export CFLAGS='-Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion'
+          export PIP_CONSTRAINT=${GITHUB_WORKSPACE}/constraints.txt
+          echo 'cython==0.29.36' > ${GITHUB_WORKSPACE}/constraints.txt
+          echo 'Cython==0.29.36' >> ${GITHUB_WORKSPACE}/constraints.txt
+          echo 'setuptools<69.0.0' >> ${GITHUB_WORKSPACE}/constraints.txt
+
+          # ১ম প্রচেষ্টা: যদি SDK 36.0.0 এর কারণে থামে, তবে সেটি ঠিক করে পরিষ্কারভাবে APK প্যাক করবে
+          if ! yes | buildozer android debug > build.log 2>&1; then
+            echo 'Fixing Android SDK build-tools and cleaning partial dist...'
+            SDK_DIR=$HOME/.buildozer/android/platform/android-sdk
+            SDKM=$(find $SDK_DIR -name sdkmanager | head -n 1)
             
-            # ভাঙা 36.0.0 এবং 35.0.0 মুছে ফেলা যাতে শুধুমাত্র 33.0.2 ব্যবহৃত হয়
-            rm -rf "$SDK_DIR/build-tools/36"* || true
-            rm -rf "$SDK_DIR/build-tools/35"* || true
-            rm -rf "$SDK_DIR/build-tools/34"* || true
-            echo "Remaining build-tools:"
-            ls -la "$SDK_DIR/build-tools/"
+            if [ -n "$SDKM" ]; then
+              yes | $SDKM --sdk_root=$SDK_DIR 'platforms;android-33' 'build-tools;33.0.2' || true
+              rm -rf $SDK_DIR/build-tools/36* || true
+              rm -rf $SDK_DIR/build-tools/35* || true
+              rm -rf $SDK_DIR/build-tools/34* || true
+            fi
+
+            # আগের অর্ধ-সমাপ্ত dist ফোল্ডার মুছে ফেলা যাতে SDLActivity.java.patch এরর না হয়
+            rm -rf $HOME/.buildozer/android/platform/build-arm64-v8a/dists || true
+            rm -rf .buildozer/android/platform/build-arm64-v8a/dists || true
+            rm -rf .buildozer/android/app || true
+
+            if ! yes | buildozer android debug > build2.log 2>&1; then
+              echo '=== BUILD LOG TAIL ==='
+              tail -n 150 build2.log
+              exit 1
+            fi
           fi
 
-      - name: Step 2 - Final APK Build (Single Clean Pass)
-        run: |
-          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          export PATH=$JAVA_HOME/bin:$PATH
-          export PIP_NO_BUILD_ISOLATION=1
-          export CFLAGS="-Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion"
-          export PIP_CONSTRAINT="${GITHUB_WORKSPACE}/constraints.txt"
-          echo "cython==0.29.36" > "${GITHUB_WORKSPACE}/constraints.txt"
-          echo "Cython==0.29.36" >> "${GITHUB_WORKSPACE}/constraints.txt"
-          echo "setuptools<69.0
+          echo 'APK Built Successfully!'
+          ls -la bin/
+
+      - name: Upload APK for Download
+        uses: actions/upload-artifact@v4
+        with:
+          name: BatteryGuruPro-APK
+          path: bin/*.apk
