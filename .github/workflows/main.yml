@@ -16,11 +16,17 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Set up JDK 11 (Required for Gradle APK packaging)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential git zip unzip openjdk-17-jdk \
+            build-essential git zip unzip \
             autoconf libtool pkg-config zlib1g-dev \
             libncurses5-dev libncursesw5-dev libtinfo5 \
             cmake libffi-dev libssl-dev automake libltdl-dev \
@@ -41,7 +47,7 @@ jobs:
           package.name = batterygurupro
           package.domain = org.jehadul
           source.dir = .
-          source.include_exts = py,png,jpg,kv,atlas
+          source.include_exts = py
           version = 1.0
           requirements = hostpython3==3.11.6,python3==3.11.6,kivy==2.3.0,pyjnius==1.6.1,six
           orientation = portrait
@@ -59,9 +65,18 @@ jobs:
           warn_on_root = 0
           EOF
 
-      - name: Build APK with Cython & SDK Fix
+      - name: Pre-configure Android SDK (Prevent SDK 36 Bug)
         run: |
-          # Build Isolation বন্ধ করা যাতে /tmp/build-env তৈরি হয়ে Cython 3 ডাউনলোড না হয়
+          SDK_DIR="$HOME/.buildozer/android/platform/android-sdk"
+          mkdir -p "$SDK_DIR/cmdline-tools"
+          cd "$SDK_DIR/cmdline-tools"
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip
+          mv cmdline-tools tools
+          yes | "$SDK_DIR/cmdline-tools/tools/bin/sdkmanager" --sdk_root="$SDK_DIR" "platform-tools" "platforms;android-33" "build-tools;33.0.2" > /dev/null
+
+      - name: Build APK in Single Clean Pass
+        run: |
           export PIP_NO_BUILD_ISOLATION=1
           export CFLAGS="-Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion"
           export PIP_CONSTRAINT="${GITHUB_WORKSPACE}/constraints.txt"
@@ -69,22 +84,11 @@ jobs:
           echo "Cython==0.29.36" >> "${GITHUB_WORKSPACE}/constraints.txt"
           echo "setuptools<69.0.0" >> "${GITHUB_WORKSPACE}/constraints.txt"
 
-          # ১ম রান: SDK ডাউনলোড হওয়া
+          # যেহেতু আমরা আগেই SDK 33.0.2 বসিয়েছি, তাই Buildozer যেন নতুন করে 36.0.0 নামাতে না পারে:
           if ! yes | buildozer android debug > build.log 2>&1; then
-            echo "Fixing Android SDK Build-Tools 36 bug and retrying..."
-            SDKM=$(find ~/.buildozer -name "sdkmanager" | head -n 1)
-            if [ -n "$SDKM" ]; then
-              yes | "$SDKM" --sdk_root="$HOME/.buildozer/android/platform/android-sdk" "build-tools;33.0.2" "platforms;android-33" || true
-              rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/36* || true
-              rm -rf ~/.buildozer/android/platform/android-sdk/build-tools/35* || true
-            fi
-
-            # ২য় রান: ফাইনাল বিল্ড
-            if ! yes | buildozer android debug >> build.log 2>&1; then
-              echo "========== EXACT ERROR =========="
-              grep -B 100 "Command failed" build.log | tail -n 100
-              exit 1
-            fi
+            echo "================ GRADLE / BUILD ERROR DETAILS ================"
+            grep -B 40 -A 20 "gradlew failed" build.log || tail -n 120 build.log
+            exit 1
           fi
           echo "APK Built Successfully!"
           ls -la bin/
