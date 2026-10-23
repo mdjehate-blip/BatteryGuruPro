@@ -16,11 +16,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Set up JDK 11 for Gradle
+      - name: Set up JDK 17 (Fast Cached)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '11'
+          java-version: '17'
 
       - name: Install System Dependencies
         run: |
@@ -32,7 +32,7 @@ jobs:
             cmake libffi-dev libssl-dev automake libltdl-dev \
             patch libsqlite3-dev lld liblzma-dev python3-venv
 
-      - name: Install Buildozer and Toolchain Packages
+      - name: Install Buildozer and Locked Packages
         run: |
           pip install --upgrade 'pip<24.0' 'setuptools<69.0.0' wheel
           pip install 'cython==0.29.36' virtualenv appdirs colorama jinja2 sh six toml packaging
@@ -53,19 +53,19 @@ jobs:
           orientation = portrait
           fullscreen = 0
           android.permissions = FOREGROUND_SERVICE, WAKE_LOCK, POST_NOTIFICATIONS
-          android.api = 33
+          android.api = 34
           android.minapi = 21
           android.ndk = 25b
           android.archs = arm64-v8a
           android.accept_sdk_license = True
-          p4a.branch = v2024.01.21
+          p4a.branch = master
 
           [buildozer]
           log_level = 2
           warn_on_root = 0
           EOF
 
-      - name: Build Android APK
+      - name: Pre-Fix P4A & Build Android APK
         run: |
           export PIP_NO_BUILD_ISOLATION=1
           export CFLAGS='-Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion'
@@ -74,27 +74,29 @@ jobs:
           echo 'Cython==0.29.36' >> ${GITHUB_WORKSPACE}/constraints.txt
           echo 'setuptools<69.0.0' >> ${GITHUB_WORKSPACE}/constraints.txt
 
-          # ১ম প্রচেষ্টা: যদি SDK 36.0.0 এর কারণে থামে, তবে সেটি ঠিক করে পরিষ্কারভাবে APK প্যাক করবে
+          # ১ম ধাপ: ইনিশিয়াল রান (SDK নামানো ও টুলচেইন তৈরি)
           if ! yes | buildozer android debug > build.log 2>&1; then
-            echo 'Fixing Android SDK build-tools and cleaning partial dist...'
+            echo 'Applying SDK 36.0.0 aidl fix and retrying...'
             SDK_DIR=$HOME/.buildozer/android/platform/android-sdk
             SDKM=$(find $SDK_DIR -name sdkmanager | head -n 1)
             
             if [ -n "$SDKM" ]; then
-              yes | $SDKM --sdk_root=$SDK_DIR 'platforms;android-33' 'build-tools;33.0.2' || true
+              yes | $SDKM --sdk_root=$SDK_DIR 'platforms;android-34' 'build-tools;34.0.0' || true
               rm -rf $SDK_DIR/build-tools/36* || true
               rm -rf $SDK_DIR/build-tools/35* || true
-              rm -rf $SDK_DIR/build-tools/34* || true
             fi
 
-            # আগের অর্ধ-সমাপ্ত dist ফোল্ডার মুছে ফেলা যাতে SDLActivity.java.patch এরর না হয়
+            # অর্ধ-সমাপ্ত dist ফোল্ডার পরিষ্কার করা যাতে পুনরায় বিল্ডে কোনো সংঘর্ষ না হয়
             rm -rf $HOME/.buildozer/android/platform/build-arm64-v8a/dists || true
             rm -rf .buildozer/android/platform/build-arm64-v8a/dists || true
             rm -rf .buildozer/android/app || true
 
+            # ২য় ধাপ: ফাইনাল ক্লিন APK তৈরি
             if ! yes | buildozer android debug > build2.log 2>&1; then
-              echo '=== BUILD LOG TAIL ==='
-              tail -n 150 build2.log
+              echo '=== REAL ERROR WITHOUT ENVIRONMENT SPAM ==='
+              sed '/# ENVIRONMENT:/,$d' build2.log | tail -n 60
+              echo '=== FIRST RUN ERROR ==='
+              sed '/# ENVIRONMENT:/,$d' build.log | tail -n 40
               exit 1
             fi
           fi
